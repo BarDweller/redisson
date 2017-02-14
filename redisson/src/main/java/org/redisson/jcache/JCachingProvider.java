@@ -22,6 +22,7 @@ import java.net.URL;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
+import java.util.ServiceLoader;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -34,18 +35,18 @@ import org.redisson.Redisson;
 import org.redisson.config.Config;
 
 /**
- * 
+ *
  * @author Nikita Koksharov
  *
  */
 public class JCachingProvider implements CachingProvider {
 
-    private final ConcurrentMap<ClassLoader, ConcurrentMap<URI, CacheManager>> managers = 
+    private final ConcurrentMap<ClassLoader, ConcurrentMap<URI, CacheManager>> managers =
                             new ConcurrentHashMap<ClassLoader, ConcurrentMap<URI, CacheManager>>();
-    
+
     private static final String DEFAULT_URI_PATH = "jsr107-default-config";
     private static URI defaulturi;
-    
+
     static {
         try {
             defaulturi = new URI(DEFAULT_URI_PATH);
@@ -53,7 +54,11 @@ public class JCachingProvider implements CachingProvider {
             throw new javax.cache.CacheException(e);
         }
     }
-    
+
+    public static interface ConfigProvider {
+      public Config getConfig();
+    }
+
     @Override
     public CacheManager getCacheManager(URI uri, ClassLoader classLoader, Properties properties) {
         if (uri == null) {
@@ -62,24 +67,24 @@ public class JCachingProvider implements CachingProvider {
         if (uri == null) {
             throw new CacheException("Uri is not defined. Can't load default configuration");
         }
-        
+
         if (classLoader == null) {
             classLoader = getDefaultClassLoader();
         }
-        
+
         ConcurrentMap<URI, CacheManager> value = new ConcurrentHashMap<URI, CacheManager>();
         ConcurrentMap<URI, CacheManager> oldValue = managers.putIfAbsent(classLoader, value);
         if (oldValue != null) {
             value = oldValue;
         }
-        
+
         CacheManager manager = value.get(uri);
         if (manager != null) {
             return manager;
         }
-        
+
         Config config = loadConfig(uri);
-        
+
         Redisson redisson = null;
         if (config != null) {
             redisson = (Redisson) Redisson.create(config);
@@ -120,7 +125,15 @@ public class JCachingProvider implements CachingProvider {
                     config = Config.fromYAML(yamlUrl);
                 }
             } catch (IOException e2) {
-                // skip
+                // neither config file existed.. check for config by java service
+                ServiceLoader<ConfigProvider> configLoader = ServiceLoader.load(ConfigProvider.class);
+                for(ConfigProvider configProvider : configLoader) {
+                  Config c = configProvider.getConfig();
+                  if(c!=null){
+                    config = c;
+                    break;
+                  }
+                }
             }
         }
         return config;
